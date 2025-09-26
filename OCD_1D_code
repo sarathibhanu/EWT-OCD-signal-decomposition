@@ -1,0 +1,129 @@
+"""
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.decomposition import MiniBatchDictionaryLearning
+from sklearn.linear_model import orthogonal_mp
+from scipy.io.wavfile import read, write
+
+# -----------------------------
+# Functions
+# -----------------------------
+def extract_patches_1d(signal, patch_size, step):
+    """Extract overlapping 1D patches from signal."""
+    patches = []
+    for i in range(0, len(signal) - patch_size + 1, step):
+        patches.append(signal[i:i+patch_size])
+    return np.array(patches)
+
+def reconstruct_signal_1d(patches, signal_len, patch_size, step):
+    """Rebuild signal from overlapping patches."""
+    reconstructed = np.zeros(signal_len, dtype=np.float32)
+    weight = np.zeros(signal_len, dtype=np.float32)
+
+    idx = 0
+    for i in range(0, signal_len - patch_size + 1, step):
+        reconstructed[i:i+patch_size] += patches[idx]
+        weight[i:i+patch_size] += 1
+        idx += 1
+
+    reconstructed /= np.maximum(weight, 1e-8)
+    return reconstructed
+
+def moving_average(signal, window_size=5):
+    """Simple smoothing to reduce residual noise."""
+    return np.convolve(signal, np.ones(window_size)/window_size, mode='same')
+
+# -----------------------------
+# Load ECG noisy signal
+# -----------------------------
+fs, noisy_signal = read("EMG_noisy_signal.wav")
+noisy_signal = noisy_signal.astype(float)
+
+# Normalize to [-1, 1]
+noisy_signal = noisy_signal / np.max(np.abs(noisy_signal))
+
+# -----------------------------
+# Parameters (fine-tuned)
+# -----------------------------
+patch_size = 128     # larger patch for better context
+step = 32            # overlap
+dict_size = 256      # larger dictionary
+max_iter = 400       # more training iterations
+batch_size = 100
+sparsity = 12        # allow more atoms for smoother reconstruction
+max_patches = 4000   # more patches for training
+
+# -----------------------------
+# Extract overlapping patches
+# -----------------------------
+patches = extract_patches_1d(noisy_signal, patch_size, step)
+
+# Randomly sample patches for dictionary training
+np.random.seed(0)
+idx = np.random.choice(patches.shape[0], min(max_patches, patches.shape[0]), replace=False)
+train_patches = patches[idx]
+
+# Normalize training patches (remove mean and scale)
+train_patches -= np.mean(train_patches, axis=1, keepdims=True)
+train_patches /= (np.std(train_patches, axis=1, keepdims=True) + 1e-8)
+
+# -----------------------------
+# Train dictionary
+# -----------------------------
+dict_learner = MiniBatchDictionaryLearning(
+    n_components=dict_size,
+    alpha=2.0,  # stronger sparsity prior
+    max_iter=max_iter,
+    batch_size=batch_size,
+    transform_n_nonzero_coefs=sparsity,
+    transform_algorithm='omp',
+    verbose=False
+)
+dictionary = dict_learner.fit(train_patches).components_
+
+# -----------------------------
+# Sparse coding for all patches
+# -----------------------------
+patch_means = np.mean(patches, axis=1, keepdims=True)
+all_patches_centered = patches - patch_means
+codes = orthogonal_mp(dictionary.T, all_patches_centered.T, n_nonzero_coefs=sparsity).T
+
+# Reconstruct patches
+reconstructed_patches = np.dot(codes, dictionary) + patch_means
+
+# -----------------------------
+# Rebuild denoised signal
+# -----------------------------
+reconstructed_signal = reconstruct_signal_1d(reconstructed_patches, len(noisy_signal), patch_size, step)
+
+# Normalize
+reconstructed_signal = reconstructed_signal / np.max(np.abs(reconstructed_signal))
+
+# Smooth residual noise
+reconstructed_signal = moving_average(reconstructed_signal, window_size=7)
+
+# -----------------------------
+# Visualization
+# -----------------------------
+plt.figure(figsize=(12,6))
+
+plt.subplot(2,1,1)
+plt.plot(noisy_signal[:2000], color="red")
+plt.title("Input Noisy ECG Signal")
+plt.xlabel("Sample Index")
+plt.ylabel("Amplitude")
+
+plt.subplot(2,1,2)
+plt.plot(reconstructed_signal[:2000], color="green")
+plt.title("Denoised ECG Signal (Dictionary Learning, Fine-Tuned)")
+plt.xlabel("Sample Index")
+plt.ylabel("Amplitude")
+
+plt.tight_layout()
+plt.show()
+
+# -----------------------------
+# Save denoised signal
+# -----------------------------
+write("ECG_denoised_signal.wav", fs, (reconstructed_signal * 32767).astype(np.int16))
+"""
