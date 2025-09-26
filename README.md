@@ -30,3 +30,7 @@ If you use this please cite
   doi     = {10.1016/j.nexres.2025.100644}
 }
 
+📫 Contact
+
+For questions or access to supplementary scripts, contact:
+📧 sharathibhanu@gmail.com
